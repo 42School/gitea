@@ -643,7 +643,7 @@ func RegisterRoutes(m *macaron.Macaron) {
 				}, reqToken(), reqAdmin())
 				m.Group("/collaborators", func() {
 					m.Get("", repo.ListCollaborators)
-					m.Combo("/:collaborator").Get(repo.IsCollaborator).
+					m.Combo("/:collaborator").Get(repo.GetCollaboration).
 						Put(bind(api.AddCollaboratorOption{}), repo.AddCollaborator).
 						Delete(repo.DeleteCollaborator)
 				}, reqToken(), reqAdmin())
