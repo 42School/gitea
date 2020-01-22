@@ -110,6 +110,18 @@ func (repo *Repository) getCollaboration(e Engine, uid int64) (*Collaboration, e
 	return collaboration, err
 }
 
+// GetCollaboration returns the collaboration mode as a string for a user for a repository
+func (repo *Repository) GetCollaboration(uid int64) (string, error) {
+	collab, err := repo.getCollaboration(x, uid)
+	if err != nil {
+		return "", err
+	}
+	if collab == nil {
+		return "", nil
+	}
+	return collab.Mode.String(), nil
+}
+
 func (repo *Repository) isCollaborator(e Engine, userID int64) (bool, error) {
 	return e.Get(&Collaboration{RepoID: repo.ID, UserID: userID})
 }

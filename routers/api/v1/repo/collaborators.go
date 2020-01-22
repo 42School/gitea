@@ -110,6 +110,58 @@ func IsCollaborator(ctx *context.APIContext) {
 	}
 }
 
+// GetCollaboration check if a user is a collaborator of a repository
+func GetCollaboration(ctx *context.APIContext) {
+	// swagger:operation GET /repos/{owner}/{repo}/collaborators/{collaborator} repository repoCheckCollaborator
+	// ---
+	// summary: Check if a user is a collaborator of a repository
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: owner
+	//   in: path
+	//   description: owner of the repo
+	//   type: string
+	//   required: true
+	// - name: repo
+	//   in: path
+	//   description: name of the repo
+	//   type: string
+	//   required: true
+	// - name: collaborator
+	//   in: path
+	//   description: username of the collaborator
+	//   type: string
+	//   required: true
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/string"
+	//   "404":
+	//     "$ref": "#/responses/notFound"
+	//   "422":
+	//     "$ref": "#/responses/validationError"
+
+	user, err := models.GetUserByName(ctx.Params(":collaborator"))
+	if err != nil {
+		if models.IsErrUserNotExist(err) {
+			ctx.Error(http.StatusUnprocessableEntity, "", err)
+		} else {
+			ctx.Error(http.StatusInternalServerError, "GetUserByName", err)
+		}
+		return
+	}
+	collaboration, err := ctx.Repo.Repository.GetCollaboration(user.ID)
+	if err != nil {
+		ctx.Error(http.StatusInternalServerError, "GetCollaboration", err)
+		return
+	}
+	if collaboration != "" || collaboration == "none" {
+		ctx.JSON(200, collaboration)
+	} else {
+		ctx.NotFound()
+	}
+}
+
 // AddCollaborator add a collaborator to a repository
 func AddCollaborator(ctx *context.APIContext, form api.AddCollaboratorOption) {
 	// swagger:operation PUT /repos/{owner}/{repo}/collaborators/{collaborator} repository repoAddCollaborator
