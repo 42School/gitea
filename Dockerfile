@@ -18,9 +18,12 @@ RUN apk --no-cache add build-base git nodejs npm
 COPY . ${GOPATH}/src/code.gitea.io/gitea
 WORKDIR ${GOPATH}/src/code.gitea.io/gitea
 
+RUN mkdir -p bin
 #Checkout version if set
 RUN if [ -n "${GITEA_VERSION}" ]; then git checkout "${GITEA_VERSION}"; fi \
- && make clean-all build
+ && make clean-all build && cp gitea ./bin/
+
+RUN go build -o ./bin/environment-to-ini ${GOPATH}/src/code.gitea.io/gitea/contrib/environment-to-ini
 
 FROM alpine:3.11
 LABEL maintainer="maintainers@gitea.io"
@@ -62,5 +65,5 @@ ENTRYPOINT ["/usr/bin/entrypoint"]
 CMD ["/bin/s6-svscan", "/etc/s6"]
 
 COPY docker/root /
-COPY --from=build-env /go/src/code.gitea.io/gitea/gitea /app/gitea/gitea
+COPY --from=build-env /go/src/code.gitea.io/gitea/bin/ /app/gitea/
 RUN ln -s /app/gitea/gitea /usr/local/bin/gitea

@@ -220,5 +220,5 @@ func DecodeSectionKey(encoded string) (string, string) {
 	} else {
 		key += remaining
 	}
-	return section, key
+	return strings.ToLower(section), key
 }

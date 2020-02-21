@@ -44,7 +44,7 @@ if [ ! -f ${GITEA_CUSTOM}/conf/app.ini ]; then
     REQUIRE_SIGNIN_VIEW=${REQUIRE_SIGNIN_VIEW:-"false"} \
     SECRET_KEY=${SECRET_KEY:-""} \
     envsubst < /etc/templates/app.ini > ${GITEA_CUSTOM}/conf/app.ini
-
+    /app/gitea/environment-to-ini -c ${GITEA_CUSTOM}/conf/app.ini
     chown ${USER}:git ${GITEA_CUSTOM}/conf/app.ini
 fi
 
