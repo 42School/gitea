@@ -10,6 +10,7 @@ import (
 
 	"code.gitea.io/gitea/modules/structs"
 	"code.gitea.io/gitea/modules/util"
+	"code.gitea.io/gitea/tools"
 
 	"xorm.io/builder"
 )
@@ -239,9 +240,9 @@ func SearchRepositoryCondition(opts *SearchRepoOptions) builder.Cond {
 
 	// Restrict repositories to those the OwnerID owns or contributes to as per opts.Collaborate
 	if opts.OwnerID > 0 {
-		var accessCond = builder.NewCond()
+		var accessSubquery *builder.Builder
 		if opts.Collaborate != util.OptionalBoolTrue {
-			accessCond = builder.Eq{"owner_id": opts.OwnerID}
+			accessSubquery = tools.Union(accessSubquery, "", builder.Select("`repository`.id").From("`repository`").Where(builder.Eq{"owner_id": opts.OwnerID}))
 		}
 
 		if opts.Collaborate != util.OptionalBoolFalse {
@@ -274,22 +275,22 @@ func SearchRepositoryCondition(opts *SearchRepoOptions) builder.Cond {
 									"`user`.visibility": structs.VisibleTypePrivate,
 								})))),
 			)
+
 			if !opts.Private {
 				collaborateCond = collaborateCond.And(builder.Expr("owner_id NOT IN (SELECT org_id FROM org_user WHERE org_user.uid = ? AND org_user.is_public = ?)", opts.OwnerID, false))
 			}
-
-			accessCond = accessCond.Or(collaborateCond)
+			accessSubquery = tools.Union(accessSubquery, "", builder.Select("`repository`.id").From("`repository`").InnerJoin("`access`", "`access`.repo_id = `repository`.id").Where(builder.And(collaborateCond, builder.Eq{"`access`.user_id": opts.OwnerID})))
+			accessSubquery = tools.Union(accessSubquery, "", builder.Select("`repository`.id").From("`repository`").InnerJoin("`team_repo`", "`team_repo`.repo_id = `repository`.id").InnerJoin("`team_user`", "`team_user`.team_id = `team_repo`.team_id").Where(builder.And(collaborateCond, builder.Eq{"`team_user`.uid": opts.OwnerID})))
 		}
 
 		if opts.AllPublic {
-			accessCond = accessCond.Or(builder.Eq{"is_private": false}.And(builder.In("owner_id", builder.Select("`user`.id").From("`user`").Where(builder.Eq{"`user`.visibility": structs.VisibleTypePublic}))))
+			accessSubquery = tools.Union(accessSubquery, "", builder.Select("`repository`.id").From("`repository`").InnerJoin("`user`", "`user`.id = `repository`.owner_id").Where(builder.Eq{"`repository`.is_private": false}.And(builder.Eq{"`user`.visibility": structs.VisibleTypePublic})))
 		}
 
 		if opts.AllLimited {
-			accessCond = accessCond.Or(builder.Eq{"is_private": false}.And(builder.In("owner_id", builder.Select("`user`.id").From("`user`").Where(builder.Eq{"`user`.visibility": structs.VisibleTypeLimited}))))
+			accessSubquery = tools.Union(accessSubquery, "", builder.Select("`repository`.id").From("`repository`").InnerJoin("`user`", "`user`.id = `repository`.owner_id").Where(builder.Eq{"`repository`.is_private": false}.And(builder.Eq{"`user`.visibility": structs.VisibleTypeLimited})))
 		}
-
-		cond = cond.And(accessCond)
+		cond = cond.And(builder.In("`repository`.id", accessSubquery))
 	}
 
 	if opts.Keyword != "" {
@@ -399,7 +400,7 @@ func SearchRepositoryByCondition(opts *SearchRepoOptions, cond builder.Cond, loa
 
 // accessibleRepositoryCondition takes a user a returns a condition for checking if a repository is accessible
 func accessibleRepositoryCondition(user *User) builder.Cond {
-	var cond = builder.NewCond()
+	var subQuery *builder.Builder
 
 	if user == nil || !user.IsRestricted || user.ID <= 0 {
 		orgVisibilityLimit := []structs.VisibleType{structs.VisibleTypePrivate}
@@ -407,40 +408,47 @@ func accessibleRepositoryCondition(user *User) builder.Cond {
 			orgVisibilityLimit = append(orgVisibilityLimit, structs.VisibleTypeLimited)
 		}
 		// 1. Be able to see all non-private repositories that either:
-		cond = cond.Or(builder.And(
-			builder.Eq{"`repository`.is_private": false},
-			// 2. Aren't in an private organisation or limited organisation if we're not logged in
-			builder.NotIn("`repository`.owner_id", builder.Select("id").From("`user`").Where(
-				builder.And(
-					builder.Eq{"type": UserTypeOrganization},
-					builder.In("visibility", orgVisibilityLimit)),
-			))))
+		subQuery = tools.Union(subQuery, "", builder.Select("`repository`.id").From("repository").InnerJoin("`user`", builder.Expr("`repository`.owner_id = `user`.id")).Where(
+			builder.And(
+				//   A. Aren't in organisations  __OR__
+				//   B. Isn't a private organisation. Limited is OK as long as we're logged in.
+				builder.Eq{"`repository`.is_private": false},
+				builder.Or(builder.Eq{"`user`.type": UserTypeOrganization}, builder.In("`user`.visibility", orgVisibilityLimit)),
+			)))
 	}
 
 	if user != nil {
-		cond = cond.Or(
-			// 2. Be able to see all repositories that we have access to
-			builder.In("`repository`.id", builder.Select("repo_id").
-				From("`access`").
-				Where(builder.And(
-					builder.Eq{"user_id": user.ID},
-					builder.Gt{"mode": int(AccessModeNone)}))),
-			// 3. Repositories that we directly own
-			builder.Eq{"`repository`.owner_id": user.ID},
-			// 4. Be able to see all repositories that we are in a team
-			builder.In("`repository`.id", builder.Select("`team_repo`.repo_id").
-				From("team_repo").
-				Where(builder.Eq{"`team_user`.uid": user.ID}).
-				Join("INNER", "team_user", "`team_user`.team_id = `team_repo`.team_id")),
-			// 5. Be able to see all public repos in private organizations that we are an org_user of
-			builder.And(builder.Eq{"`repository`.is_private": false},
-				builder.In("`repository`.owner_id",
-					builder.Select("`org_user`.org_id").
-						From("org_user").
-						Where(builder.Eq{"`org_user`.uid": user.ID}))))
+		// 2. Be able to see all repositories that we have access to
+		subQuery = tools.Union(subQuery, "", builder.Select("`repository`.id").From("repository").
+			InnerJoin("access", builder.Expr("access.repo_id = repository.id")).Where(
+			builder.And(
+				builder.Eq{"user_id": user.ID},
+				builder.Gt{"mode": int(AccessModeNone)},
+			),
+		))
+		// 3. Repositories that we directly own
+		subQuery = tools.Union(subQuery, "", builder.Select("`repository`.id").From("repository").Where(builder.Eq{"owner_id": user.ID}))
+		// 4. Be able to see all repositories that we are in a team
+		subQuery = tools.Union(subQuery, "", builder.Select("`repository`.id").
+			From("repository").
+			InnerJoin("team_repo", builder.Expr("repository.id = `team_repo`.repo_id")).
+			InnerJoin("team_user", builder.Expr("`team_user`.team_id = `team_repo`.team_id")).
+			Where(
+				builder.Eq{"`team_user`.uid": user.ID},
+			))
+		// 5. Be able to see all public repos in private organizations that we are an org_user of
+		subQuery = tools.Union(subQuery, "", builder.Select("`repository`.id").
+			From("repository").
+			InnerJoin("org_user", builder.Expr("repository.owner_id = `org_user`.org_id")).
+			Where(
+				builder.And(
+					builder.Eq{"`repository`.is_private": false},
+					builder.Eq{"`org_user`.uid": user.ID},
+				),
+			),
+		)
 	}
-
-	return cond
+	return builder.In("`repository`.id", subQuery)
 }
 
 // SearchRepositoryByName takes keyword and part of repository name to search,
